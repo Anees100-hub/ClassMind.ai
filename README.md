@@ -363,3 +363,4 @@ Ask the repository owner before redistributing.
 <p align="center">
   <sub>Built for smarter classrooms — ClassMind.ai</sub>
 </p>
+"# ClassMind.ai" 
