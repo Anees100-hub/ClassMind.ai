@@ -1,0 +1,12 @@
+Connecting to: mongodb+srv://ab8432202:Aneesb...
+✓ Connected to MongoDB
+
+--- Searching for admin user ---
+✓ Admin user EXISTS
+  Email: admin@classmind.ai
+  Password: password123
+  Role: admin
+  Name: Admin User
+
+--- Testing login query ---
+✓ Login query WORKS - credentials match!

@@ -1,0 +1,45 @@
+# ============================================================
+# ClassMind.ai - Teacher Face Recognition Module
+# Python Dependencies
+# ============================================================
+
+# Core Face Recognition
+face-recognition==1.3.0          # dlib-based 128D face descriptor encoding
+deepface==0.0.93                  # Alternative: ArcFace / DeepFace backend
+
+# Computer Vision
+opencv-python==4.8.1.78           # Webcam capture & real-time frame processing
+
+# API Framework
+fastapi==0.111.0                  # FastAPI web framework
+uvicorn[standard]==0.29.0         # ASGI server to run FastAPI
+python-multipart==0.0.9           # File upload support for FastAPI
+
+# Database
+pymongo==4.7.1                    # MongoDB driver for Python
+
+# Utilities
+numpy==1.26.4                     # Array math for face descriptor comparison
+Pillow==10.3.0                    # Image processing
+python-dotenv==1.0.1              # Load .env variables
+scipy==1.13.0                     # Euclidean distance / cosine similarity
+
+# Data Serialization
+pickle-mixin==1.0.2               # Pickle-based encoding storage (built-in pickle used)
+
+# HTTP Client (to call Node.js backend from Python)
+httpx==0.27.0                     # Async HTTP client
+
+# Deep learning / TensorFlow compatibility
+# `retinaface` and some DeepFace backends require `tf-keras` when
+# TensorFlow >= 2.20 is installed. If you hit runtime errors mentioning
+# `tf-keras` or incompatible TF APIs, install these pinned versions:
+tensorflow==2.21.0
+tf-keras>=2.14.0            # Required by retinaface (DeepFace dep) when TF >= 2.20
+
+# ============================================================
+# Install notes:
+#   pip install face-recognition   -> Requires dlib (CMake build)
+#   pip install cmake dlib          -> Build tools on Windows
+#   OR use: pip install deepface    -> Simpler, no dlib needed
+# ============================================================

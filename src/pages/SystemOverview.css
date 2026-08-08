@@ -1,0 +1,59 @@
+.admin-dashboard .chart-body {
+    width: 100%;
+    min-height: 200px;
+}
+
+.admin-quick-links {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
+    gap: 16px;
+}
+
+.quick-link-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: left;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.quick-link-card:hover {
+    border-color: #6366F1;
+    box-shadow: 0 8px 20px -6px rgba(99, 102, 241, 0.2);
+    transform: translateY(-2px);
+}
+
+.quick-link-count {
+    font-size: 1.5rem;
+    font-weight: 800;
+}
+
+.quick-link-label {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.quick-link-arrow {
+    position: absolute;
+    top: 20px;
+    right: 16px;
+    color: var(--text-muted);
+    opacity: 0.5;
+}
+
+.quick-link-card:hover .quick-link-arrow {
+    opacity: 1;
+    color: #6366F1;
+}
+
+@media (max-width: 480px) {
+    .admin-quick-links {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}

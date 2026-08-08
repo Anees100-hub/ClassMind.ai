@@ -1,0 +1,7 @@
+Seeding Error:
+MongooseError: Operation `Students.deleteMany()` buffering timed out after 10000ms
+MongooseError: Operation `Students.deleteMany()` buffering timed out after 10000ms
+    at Timeout.<anonymous> (C:\Users\ab843\OneDrive\Desktop\classmind-dashboard\server\node_modules\mongoose\lib\drivers\node-mongodb-native\collection.js:187:23)
+    at listOnTimeout (node:internal/timers:594:17)
+    at process.processTimers (node:internal/timers:529:7)
+{}

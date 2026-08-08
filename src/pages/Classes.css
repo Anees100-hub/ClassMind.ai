@@ -1,0 +1,95 @@
+.classes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 24px;
+}
+
+.class-card {
+    background: white;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    transition: all 0.3s ease;
+}
+
+.class-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.status-tag {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.status-tag.active {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+.status-tag.draft {
+    background: #F3F4F6;
+    color: #4B5563;
+}
+
+.more-btn {
+    background: transparent;
+    color: var(--text-muted);
+    padding: 4px;
+    border-radius: 8px;
+}
+
+.class-name {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-bottom: 16px;
+}
+
+.class-info-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.info-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.info-item svg {
+    color: var(--primary);
+}
+
+.class-card-footer {
+    margin-top: 10px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+}
+
+.view-details-btn {
+    width: 100%;
+    padding: 10px;
+    border-radius: 10px;
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.view-details-btn:hover {
+    background: var(--primary);
+    color: white;
+}

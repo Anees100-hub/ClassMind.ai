@@ -1,0 +1,77 @@
+/* Shared student portal utilities */
+
+.student-page {
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.student-notif-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.notif-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.notif-header-actions .btn-secondary-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.empty-notifications {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+}
+
+.empty-notifications h3 {
+    margin-top: 12px;
+    color: var(--text-main);
+}
+
+.notifications-page .notification-card {
+    cursor: pointer;
+}
+
+.empty-section-msg {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    padding: 12px 0;
+}
+
+.empty-section-msg.centered {
+    text-align: center;
+    padding: 32px 16px;
+}
+
+.ai-inline-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    color: #7C3AED;
+    font-weight: 600;
+}
+
+.material-download-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    color: inherit;
+}
+
+@media (max-width: 640px) {
+    .student-page .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

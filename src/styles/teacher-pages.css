@@ -1,0 +1,49 @@
+/* Shared teacher portal page utilities */
+
+.teacher-page {
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.teacher-btn-main {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #3B82F6 0%, #6366F1 100%);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.teacher-btn-main:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px -6px rgba(59, 130, 246, 0.5);
+}
+
+.btn-secondary-sm {
+    padding: 8px 14px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    color: var(--text-main);
+}
+
+.btn-secondary-sm:hover {
+    background: #F9FAFB;
+}
+
+@media (max-width: 640px) {
+    .teacher-page .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

@@ -1,0 +1,165 @@
+.student-tracking-page {
+    padding: 32px;
+    background: white;
+    min-height: 100vh;
+}
+
+.breadcrumb {
+    margin-bottom: 24px;
+}
+
+.student-tracking-page .page-header {
+    margin-bottom: 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+}
+
+.student-tracking-page .page-header h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #111827;
+}
+
+.student-tracking-page .page-header p {
+    color: #6B7280;
+    margin-top: 4px;
+}
+
+.tracking-table-container {
+    background: white;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+.tracking-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.tracking-table th {
+    text-align: left;
+    padding: 16px 24px;
+    color: #374151;
+    font-weight: 700;
+    font-size: 1rem;
+    border-bottom: 1px solid #F3F4F6;
+}
+
+.tracking-table td {
+    padding: 20px 24px;
+    border-bottom: 1px solid #F9FAFB;
+    vertical-align: middle;
+}
+
+.student-cell {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: white;
+    font-size: 1.1rem;
+    background: #6366F1;
+}
+
+.student-cell .name {
+    font-weight: 700;
+    color: #111827;
+    font-size: 1.1rem;
+    margin: 0;
+}
+
+.student-cell .email {
+    color: #6B7280;
+    font-size: 0.9rem;
+    margin: 0;
+}
+
+/* Specific Progress Bar Styling matching the image */
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 12px;
+    border-radius: 4px;
+}
+
+.status-dot.green {
+    background: #10B981;
+}
+
+.status-dot.yellow {
+    background: #F59E0B;
+}
+
+.status-dot.red {
+    background: #EF4444;
+}
+
+.val-text {
+    font-weight: 600;
+    color: #374151;
+    font-size: 1rem;
+    min-width: 40px;
+}
+
+.assignments-val {
+    font-weight: 600;
+    color: #374151;
+    font-size: 1rem;
+}
+
+/* Trend Badge */
+.trend-badge {
+    padding: 6px 14px;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.trend-badge.improving {
+    background: #E1F9F0;
+    color: #2D6A4F;
+}
+
+.trend-badge.stable {
+    background: #F3F4F6;
+    color: #6B7280;
+}
+
+.trend-badge.declining {
+    background: #FEE2E2;
+    color: #991B1B;
+}
+
+.btn-back {
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #6B7280;
+    font-weight: 600;
+    padding: 8px 0;
+}
+
+.btn-back:hover {
+    color: #4F46E5;
+}

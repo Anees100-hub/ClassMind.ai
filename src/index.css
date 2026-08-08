@@ -1,0 +1,73 @@
+@import './styles/dashboard-shared.css';
+@import './styles/admin-pages.css';
+@import './styles/teacher-pages.css';
+@import './styles/student-pages.css';
+
+:root {
+  /* Brand Colors */
+  --primary: #8B5CF6; /* Violet 500 - Adjusting to match the bright purple in designs */
+  --primary-dark: #7C3AED; /* Violet 600 */
+  --primary-gradient: linear-gradient(135deg, #7C3AED 0%, #2563EB 100%);
+  
+  /* Login Background Gradient */
+  --login-bg: linear-gradient(135deg, #2E1065 0%, #1E1B4B 100%); /* Deep purple to dark navy */
+  
+  /* Neutral Colors */
+  --bg-dark: #111827; /* Gray 900 - Sidebar */
+  --bg-light: #F3F4F6; /* Gray 100 - Main BG */
+  --card-bg: #FFFFFF;
+  --text-main: #1F2937; /* Gray 800 */
+  --text-muted: #6B7280; /* Gray 500 */
+  --border: #E5E7EB; /* Gray 200 */
+  
+  /* Status Colors */
+  --status-active-bg: #D1FAE5;
+  --status-active-text: #065F46;
+  
+  /* Spacing */
+  --sidebar-width: 260px;
+  --header-height: 70px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-light);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+input {
+  font-family: inherit;
+}
+
+/* Scrollbar styling for a cleaner look */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}

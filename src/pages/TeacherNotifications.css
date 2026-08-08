@@ -1,0 +1,19 @@
+.teacher-notif-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.notif-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.notif-header-actions .btn-secondary-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}

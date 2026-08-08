@@ -1,0 +1,218 @@
+.teacher-analytics-page {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.analytics-summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 24px;
+}
+
+.ana-card {
+    padding: 32px;
+    border-radius: 24px;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
+}
+
+.ana-card.green {
+    background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+}
+
+.ana-card.yellow {
+    background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+}
+
+.ana-card.red {
+    background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+}
+
+.ana-card.blue {
+    background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%);
+}
+
+.ana-card .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ana-card .value {
+    font-size: 2.8rem;
+    font-weight: 800;
+}
+
+.ana-card .label {
+    font-size: 1.1rem;
+    font-weight: 500;
+    opacity: 0.9;
+}
+
+.analytics-charts-grid {
+    display: grid;
+    grid-template-columns: 1.8fr 1fr;
+    gap: 24px;
+}
+
+.chart-card {
+    background: white;
+    padding: 32px;
+    border-radius: 24px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.chart-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 32px;
+}
+
+.chart-header h3 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.chart-legend {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin-top: 32px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+
+.dot.engaged {
+    background: #10B981;
+}
+
+.dot.neutral {
+    background: #F59E0B;
+}
+
+.dot.disengaged {
+    background: #EF4444;
+}
+
+@media (max-width: 1100px) {
+    .analytics-charts-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.analytics-metadata-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+.metadata-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.metadata-card span {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.metadata-card strong {
+    font-size: 1rem;
+    color: var(--text-main);
+    word-break: break-word;
+}
+
+.report-status {
+    padding: 16px 20px;
+    background: #FEF3C7;
+    border: 1px solid #FDE68A;
+    border-radius: 12px;
+    color: #92400E;
+    font-weight: 500;
+}
+
+.report-generated-at {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.session-filter {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 16px;
+}
+
+.session-select {
+    border: none;
+    background: transparent;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-main);
+    cursor: pointer;
+    outline: none;
+}
+
+.empty-section-msg {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.session-filter-label {
+    margin-top: 8px;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.session-table .session-row {
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.session-table .session-row:hover {
+    background: #F8FAFC;
+}
+
+.session-table .session-row.selected {
+    background: #EEF2FF;
+}
+
+.session-table .session-row.selected td:first-child span {
+    color: #4338CA;
+}
