@@ -31,10 +31,13 @@
 |------|----------------|
 | **1. Roles** | Admin, Teacher, and Student each get a tailored dashboard |
 | **2. Live lecture** | Teacher starts a session from their course hub |
-| **3. Face attendance** | Webcam + AI verify the teacher and mark attendance |
+| **3. Teacher face login** | Webcam + AI verify the **teacher** (not students) and open the session |
 | **4. Engagement** | Emotion analysis tracks Engaged / Neutral / Disengaged in real time |
 | **5. Materials & alerts** | Uploads get AI summaries; class-scoped notifications reach the right people |
 | **6. Smarter classrooms** | Admins see institution-wide analytics; everyone stays in sync |
+
+Demo teachers shown in the cartoon: **Samar Fatima**, **Muhammad Anees Butt**, **Ayesha**, and **Noman**.  
+Student attendance is **not** part of ClassMind — the walkthrough only shows **teacher** face verification.
 
 ### 2) Live emotion detection (real app recording)
 

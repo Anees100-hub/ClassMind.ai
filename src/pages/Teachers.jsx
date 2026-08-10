@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useData } from '../context/DataContext';
+import { apiFetch } from '../utils/api';
 import * as XLSX from 'xlsx';
 import { Plus, Search, Mail, Phone, Edit, Trash2, X, GraduationCap, MapPin, Calendar, BookOpen, FileSpreadsheet, Camera } from 'lucide-react';
 import './Teachers.css';
@@ -151,31 +152,36 @@ const Teachers = () => {
             const regRes = await fetch('/python-api/face/register-to-db', {
                 method: 'POST',
                 body: regFormData,
+                signal: AbortSignal.timeout(180000),
             });
-            const regData = await regRes.json();
+            const regData = await regRes.json().catch(() => ({}));
 
             if (!regRes.ok) {
-                throw new Error(regData.detail || 'Face descriptor registration failed');
+                const detail = regData.detail;
+                throw new Error(typeof detail === 'string' ? detail : (detail?.[0]?.msg || 'Face descriptor registration failed'));
             }
 
-            // Step 3: Also register via Node.js route to keep React state in sync
+            // Step 3: Persist via Node (auth required) — works even if Python Mongo is down
             if (!regData.descriptor || !Array.isArray(regData.descriptor)) {
                 throw new Error('Python server did not return a valid face descriptor.');
             }
-            await fetch('/api/teachers/register-face', {
+            const nodeRes = await apiFetch('/api/teachers/register-face', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     teacherId: teacherIdNum,
                     faceDescriptor: regData.descriptor
                 })
             });
+            if (!nodeRes.ok) {
+                const nodeErr = await nodeRes.json().catch(() => ({}));
+                throw new Error(nodeErr.message || 'Failed to save face via Node API. Log in again and retry.');
+            }
 
             // Step 4: Retrain encodings so recognition model includes this teacher
-            await fetch('/python-api/face/train', { method: 'POST' });
+            await fetch('/python-api/face/train?sync=true', { method: 'POST', signal: AbortSignal.timeout(180000) });
 
             setFaceUploadStatus('success');
-            setFaceUploadMessage(`🎉 Face registered! ${regData.descriptor_dimensions || regData.descriptor.length}D descriptor saved. Model retraining started.`);
+            setFaceUploadMessage(`Face registered! ${regData.descriptor_dimensions || regData.descriptor.length}D descriptor saved. Model retrained.`);
             setFormData(prev => ({ ...prev, faceDescriptor: regData.descriptor }));
             setFaceCaptured(true);
 

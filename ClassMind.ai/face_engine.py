@@ -156,24 +156,35 @@ def validate_image_for_registration(img_bgr: np.ndarray) -> dict:
                 return {"valid": False, "faces_detected": 1, "message": "Face too small. Move closer to the camera."}
             return {"valid": True, "faces_detected": 1, "message": "Face validated."}
 
-        result = DeepFace.represent(
-            img_path=rgb,
-            model_name=DEEPFACE_MODEL,
-            detector_backend=DEEPFACE_DETECTOR,
-            enforce_detection=True,
-        )
-        if len(result) > 1:
-            return {"valid": False, "faces_detected": len(result), "message": "Multiple faces detected. Only you should be in frame."}
-        if len(result) == 0:
-            return {"valid": False, "faces_detected": 0, "message": "No face detected. Look straight at the camera."}
+        # Try opencv first, then a stronger detector if needed
+        last_err = None
+        for detector in (DEEPFACE_DETECTOR, "ssd", "retinaface"):
+            try:
+                result = DeepFace.represent(
+                    img_path=rgb,
+                    model_name=DEEPFACE_MODEL,
+                    detector_backend=detector,
+                    enforce_detection=True,
+                )
+                if len(result) > 1:
+                    return {"valid": False, "faces_detected": len(result), "message": "Multiple faces detected. Only you should be in frame."}
+                if len(result) == 0:
+                    last_err = "No face detected"
+                    continue
 
-        area = result[0].get("facial_area") or {}
-        width = int(area.get("w") or 0)
-        height = int(area.get("h") or 0)
-        if width < min_face_size or height < min_face_size:
-            return {"valid": False, "faces_detected": 1, "message": "Face too small. Move closer to the camera."}
+                area = result[0].get("facial_area") or {}
+                width = int(area.get("w") or 0)
+                height = int(area.get("h") or 0)
+                # Allow slightly smaller faces from laptop webcams
+                if width and height and (width < 50 or height < 50):
+                    return {"valid": False, "faces_detected": 1, "message": "Face too small. Move closer to the camera."}
 
-        return {"valid": True, "faces_detected": 1, "message": "Face validated."}
+                return {"valid": True, "faces_detected": 1, "message": f"Face validated ({detector})."}
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+
+        return {"valid": False, "faces_detected": 0, "message": f"No face detected. Look straight at the camera with good lighting. ({last_err})"}
     except Exception as exc:
         return {"valid": False, "faces_detected": 0, "message": f"Face validation failed: {exc}"}
 
@@ -208,13 +219,21 @@ def extract_descriptor_from_bgr(img_bgr: np.ndarray) -> list[float]:
         return [round(float(v), 6) for v in encoding.tolist()]
 
     if HAS_DEEPFACE:
-        result = DeepFace.represent(
-            img_path=rgb,
-            model_name=DEEPFACE_MODEL,
-            detector_backend=DEEPFACE_DETECTOR,
-            enforce_detection=True,
-        )
-        return [round(float(v), 6) for v in result[0]["embedding"]]
+        last_err = None
+        for detector in (DEEPFACE_DETECTOR, "ssd", "retinaface"):
+            try:
+                result = DeepFace.represent(
+                    img_path=rgb,
+                    model_name=DEEPFACE_MODEL,
+                    detector_backend=detector,
+                    enforce_detection=True,
+                )
+                if result:
+                    return [round(float(v), 6) for v in result[0]["embedding"]]
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+        raise ValueError(last_err or "No face detected in image.")
 
     raise RuntimeError(
         "No face recognition backend available. Install face_recognition or deepface."

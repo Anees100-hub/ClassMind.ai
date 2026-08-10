@@ -18,7 +18,7 @@ const TeacherAttendanceScanner = () => {
     const { courseId } = useParams();
     const navigate = useNavigate();
     const { currentUser } = useAuth();
-    const { getTeacherCourse, teachers, updateClass, refreshData } = useData();
+    const { getTeacherCourse, teachers, updateClass, refreshData } = useData(); // refreshData used after face register
 
     const currentCourse = getTeacherCourse(currentUser?.email, courseId);
     const teacherProfile = teachers.find(t => t.email === currentUser?.email);
@@ -86,6 +86,16 @@ const TeacherAttendanceScanner = () => {
     const [totalLectureElapsedSeconds, setTotalLectureElapsedSeconds] = useState(0);
     const [fastDemoMode, setFastDemoMode] = useState(false); // Fast schedule toggle (10s intervals for fast demo)
 
+    // Classroom V380 credentials are permanent in ClassMind.ai/.env — UI only shows status
+    const [classroomStatus, setClassroomStatus] = useState(null);
+    const [classroomBusy, setClassroomBusy] = useState(false);
+    const [classroomPreviewKey, setClassroomPreviewKey] = useState(0);
+    const [showClassroomEdit, setShowClassroomEdit] = useState(false);
+    const [classroomRtspUrl, setClassroomRtspUrl] = useState(() => localStorage.getItem('classmind_classroom_rtsp') || '');
+    const [classroomUser, setClassroomUser] = useState(() => localStorage.getItem('classmind_classroom_user') || '');
+    const [classroomPass, setClassroomPass] = useState(() => localStorage.getItem('classmind_classroom_pass') || '');
+    const [emotionSourcesUsed, setEmotionSourcesUsed] = useState([]);
+
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const webcamStreamRef = useRef(null);
@@ -93,6 +103,8 @@ const TeacherAttendanceScanner = () => {
     const scheduleTimerRef = useRef(null);
     const lectureTimerRef = useRef(null);
     const isRecordingClipRef = useRef(false);
+    const classroomStatusRef = useRef(null);
+    classroomStatusRef.current = classroomStatus;
 
     // Helper format seconds as MM:SS
     const formatTimeMMSS = (sec) => {
@@ -190,13 +202,13 @@ const TeacherAttendanceScanner = () => {
         });
     }, []);
 
-    // Initialize Front Camera Stream
+    // Teacher face recognition — laptop FRONT camera only
     const startCamera = async () => {
         setCameraError(false);
         setErrorMessage('');
         setSuccessMessage('');
         setScanProgress(0);
-        setScanningStatus('Accessing webcam feed...');
+        setScanningStatus('Accessing laptop front camera...');
         setIsScanning(false);
 
         try {
@@ -214,13 +226,45 @@ const TeacherAttendanceScanner = () => {
                 videoRef.current.srcObject = stream;
             }
 
-            setScanningStatus('Camera ready. Waiting for face recognition model...');
+            setScanningStatus('Front camera ready (teacher attendance only). Waiting for face model...');
         } catch (err) {
             console.error("Camera access failed:", err);
             setCameraError(true);
             setScanningStatus('Camera Failure');
-            setErrorMessage('Camera Failure: System displays camera error. Attendance cannot be processed.');
+            setErrorMessage('Camera Failure: Laptop front camera required for teacher attendance.');
         }
+    };
+
+    // Capture a few frames from a specific facingMode (user=front, environment=back)
+    const captureFramesFromFacing = async (facingMode, count, intervalMs) => {
+        let stream = null;
+        const frames = [];
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480, facingMode: { ideal: facingMode } }
+            });
+            const video = document.createElement('video');
+            video.playsInline = true;
+            video.muted = true;
+            video.srcObject = stream;
+            await video.play().catch(() => {});
+            await waitForVideoReady(video, 6000);
+            const canvas = document.createElement('canvas');
+            for (let i = 0; i < count; i++) {
+                if (i > 0) await new Promise(r => setTimeout(r, intervalMs));
+                if (video.videoWidth > 0) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    canvas.getContext('2d').drawImage(video, 0, 0);
+                    frames.push(canvas.toDataURL('image/jpeg', 0.72));
+                }
+            }
+        } catch (err) {
+            console.warn(`Could not open ${facingMode} camera:`, err.message);
+        } finally {
+            if (stream) stream.getTracks().forEach(t => t.stop());
+        }
+        return frames;
     };
 
     // Start face scan only when model is trained and teacher face is registered
@@ -243,12 +287,16 @@ const TeacherAttendanceScanner = () => {
         }
         setScanProgress(0);
         setIsScanning(true);
-        setScanningStatus('Scanning classroom camera... Align face inside guide.');
+        setScanningStatus('Scanning front camera... Align face inside guide.');
     }, [sessionResumed, isLectureLive, isEmotionMode, cameraError, successMessage, webcamStream, faceRegistered, aiMode]);
 
     useEffect(() => {
         checkPythonServer();
         startCamera();
+        fetch('/python-api/classroom-camera/status')
+            .then(r => r.json())
+            .then(data => setClassroomStatus(data))
+            .catch(() => { });
         return () => {
             if (webcamStreamRef.current) {
                 webcamStreamRef.current.getTracks().forEach(track => track.stop());
@@ -260,6 +308,13 @@ const TeacherAttendanceScanner = () => {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Re-bind front camera to the emotion-mode <video> after it mounts
+    useEffect(() => {
+        if (!isEmotionMode || !webcamStreamRef.current || !videoRef.current) return;
+        videoRef.current.srcObject = webcamStreamRef.current;
+        videoRef.current.play().catch(() => { });
+    }, [isEmotionMode]);
 
     // Face registration handler — requires Python face_recognition + dataset upload + train
     const handleRegisterFace = async () => {
@@ -300,43 +355,51 @@ const TeacherAttendanceScanner = () => {
             const regRes = await fetch('/python-api/face/register-to-db', {
                 method: 'POST',
                 body: regForm,
-                signal: AbortSignal.timeout(120000),
+                signal: AbortSignal.timeout(180000),
             });
-            const regData = await regRes.json();
-            if (!regRes.ok) throw new Error(regData.detail || 'Face descriptor registration failed');
+            const regData = await regRes.json().catch(() => ({}));
+            if (!regRes.ok) {
+                const detail = regData.detail;
+                throw new Error(typeof detail === 'string' ? detail : (detail?.[0]?.msg || 'Face descriptor registration failed'));
+            }
             if (!regData.descriptor || !Array.isArray(regData.descriptor) || regData.descriptor.length < expectedDescriptorDim) {
-                throw new Error(`Invalid face descriptor (${regData.descriptor?.length || 0}D). Expected at least ${expectedDescriptorDim}D. Try again with better lighting.`);
+                throw new Error(`Invalid face descriptor (${regData.descriptor?.length || 0}D). Expected at least ${expectedDescriptorDim}D. Try again with better lighting / face the camera.`);
             }
 
-            const nodeRes = await fetch('/api/teachers/register-face', {
+            // Node has the working Mongo connection — always persist here (with auth token)
+            const nodeRes = await apiFetch('/api/teachers/register-face', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     teacherId: teacherProfile.id,
                     faceDescriptor: regData.descriptor
-                })
+                }),
             });
             if (!nodeRes.ok) {
                 const nodeErr = await nodeRes.json().catch(() => ({}));
-                throw new Error(nodeErr.message || 'Failed to save face to teacher profile');
+                throw new Error(nodeErr.message || 'Failed to save face to teacher profile (login session may have expired — log in again).');
             }
 
-            const trainRes = await fetch('/python-api/face/train?sync=true', {
-                method: 'POST',
-                signal: AbortSignal.timeout(180000),
-            });
-            const trainData = await trainRes.json().catch(() => ({}));
-            if (!trainRes.ok) throw new Error(trainData.detail || 'Model training failed after registration');
-
-            const status = await checkPythonServer();
-            if (!status.modelReady) {
-                throw new Error('Face registered but model is not ready. Click Retrain Model or try again.');
+            // Train model — do not fail registration if train is slow/fails; user can retrain
+            try {
+                const trainRes = await fetch('/python-api/face/train?sync=true', {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(180000),
+                });
+                if (!trainRes.ok) {
+                    console.warn('Train after register failed; face is still saved in DB');
+                }
+            } catch (trainErr) {
+                console.warn('Train after register error:', trainErr);
             }
 
+            await refreshData?.();
+            await checkPythonServer();
             setRegisterSuccess(true);
-            setTimeout(() => window.location.reload(), 1500);
+            setTimeout(() => window.location.reload(), 1200);
         } catch (err) {
-            setRegisterError(err.message || 'Face registration error');
+            const msg = err?.message || 'Face registration error';
+            setRegisterError(msg);
+            console.error('Face registration failed:', err);
         } finally {
             setIsRegistering(false);
         }
@@ -542,6 +605,113 @@ const TeacherAttendanceScanner = () => {
     // STUDENT EMOTION DETECTION WORKFLOW IMPLEMENTATION
     // ------------------------------------------------------------------
 
+    const classroomPayload = () => {
+        // Empty body → AI server uses permanent ClassMind.ai/.env credentials
+        const payload = {};
+        if (classroomRtspUrl.trim()) payload.url = classroomRtspUrl.trim();
+        if (classroomUser.trim()) payload.username = classroomUser.trim();
+        if (classroomPass) payload.password = classroomPass;
+        return payload;
+    };
+
+    const refreshClassroomStatus = async () => {
+        try {
+            const res = await fetch('/python-api/classroom-camera/status');
+            const data = await res.json().catch(() => null);
+            if (data) setClassroomStatus(data);
+        } catch (_) { /* ignore */ }
+    };
+
+    const isTimeoutError = (err) => {
+        const msg = String(err?.message || err || '').toLowerCase();
+        return msg.includes('timeout') || msg.includes('timed out') || err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    };
+
+    const testClassroomCamera = async () => {
+        setClassroomBusy(true);
+        // Never surface classroom timeout as Scanning Failure
+        try {
+            const res = await fetch('/python-api/classroom-camera/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(classroomPayload()),
+                signal: AbortSignal.timeout(90000),
+            });
+            const data = await res.json().catch(() => ({}));
+            setClassroomStatus(data);
+            if (data.has_frame || data.ok) setClassroomPreviewKey(Date.now());
+        } catch (err) {
+            if (!isTimeoutError(err)) {
+                setClassroomStatus(prev => ({ ...(prev || {}), reconnecting: true, last_error: 'Connecting classroom camera…' }));
+            } else {
+                setClassroomStatus(prev => ({ ...(prev || {}), reconnecting: true, last_error: 'Connecting classroom camera…' }));
+            }
+        } finally {
+            setClassroomBusy(false);
+        }
+    };
+
+    const connectClassroomCamera = async (silent = false) => {
+        // Already live — do not reopen RTSP (that made emotion stick on "Connecting")
+        if (classroomStatusRef.current?.has_frame || classroomStatusRef.current?.running) {
+            await refreshClassroomStatus();
+            return true;
+        }
+        setClassroomBusy(true);
+        try {
+            const payload = classroomPayload();
+            if (payload.url) localStorage.setItem('classmind_classroom_rtsp', payload.url);
+            if (payload.username) localStorage.setItem('classmind_classroom_user', payload.username);
+            if (payload.password) localStorage.setItem('classmind_classroom_pass', payload.password);
+
+            const res = await fetch('/python-api/classroom-camera/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(90000),
+            });
+            const data = await res.json().catch(() => ({}));
+            setClassroomStatus({
+                ...data,
+                running: !!(data.running || data.has_frame || data.ok),
+                has_frame: !!(data.has_frame || data.ok),
+                last_error: data.has_frame || data.ok ? null : (data.last_error || null),
+            });
+            // Do not bump classroomPreviewKey here — remounting MJPEG stops the video
+            return !!(data.has_frame || data.running || data.ok);
+        } catch (err) {
+            setClassroomStatus(prev => ({
+                ...(prev || {}),
+                reconnecting: true,
+            }));
+            return false;
+        } finally {
+            setClassroomBusy(false);
+        }
+    };
+
+    // Emotion mode: connect once. Never remount the MJPEG <img> (key changes kill the video).
+    useEffect(() => {
+        if (!isEmotionMode) return undefined;
+        let cancelled = false;
+        (async () => {
+            await refreshClassroomStatus();
+            const st = classroomStatusRef.current;
+            if (!cancelled && !st?.has_frame && !st?.running) {
+                await connectClassroomCamera(true);
+            }
+        })();
+        const statusId = setInterval(() => {
+            if (cancelled || isRecordingClipRef.current) return;
+            refreshClassroomStatus();
+        }, 8000);
+        return () => {
+            cancelled = true;
+            clearInterval(statusId);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isEmotionMode]);
+
     const startStudentEmotionWorkflow = async (lecId, resumeOptions = null) => {
         const newSessionId = resumeOptions?.sessionId || `SES-${Date.now()}`;
         setSessionIdState(newSessionId);
@@ -560,34 +730,33 @@ const TeacherAttendanceScanner = () => {
 
         setIsEmotionMode(true);
         setErrorMessage('');
+        setSuccessMessage('');
 
-        // Use front camera for student emotion detection (same camera as teacher scan)
+        // Keep laptop FRONT camera open for emotion preview + frame capture
         try {
             let stream = webcamStreamRef.current;
             if (!stream || stream.getVideoTracks().every(t => t.readyState === 'ended')) {
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
-                }
+                if (stream) stream.getTracks().forEach(track => track.stop());
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: { width: 640, height: 480, facingMode: 'user' }
                 });
                 webcamStreamRef.current = stream;
                 setWebcamStream(stream);
             }
-
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
                 await videoRef.current.play().catch(() => { });
                 await waitForVideoReady(videoRef.current);
-            } else {
-                throw new Error('Video element not available');
             }
         } catch (err) {
             console.error('Front camera initialization error:', err);
-            setErrorMessage('Could not access front camera for student emotion detection. Please allow camera permissions.');
+            setErrorMessage('Could not access laptop front camera for emotion detection. Please allow camera permissions.');
             setIsEmotionMode(false);
             return;
         }
+
+        // Soft-connect classroom if needed (won't remount preview / reopen RTSP if live)
+        await connectClassroomCamera(true);
 
         startLectureDurationTimer(lecId);
 
@@ -603,6 +772,8 @@ const TeacherAttendanceScanner = () => {
             return;
         }
 
+        // Let MJPEG preview settle before first emotion clip
+        await new Promise(r => setTimeout(r, 1500));
         await captureAndAnalyzeClip(lecId, newSessionId, 1);
 
         const initialDelay = fastDemoMode ? 10 : 30 * 60;
@@ -653,7 +824,7 @@ const TeacherAttendanceScanner = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [currentCourse?.lectureStatus, currentCourse?.lectureId, sessionResumed, isLectureLive]);
 
-    // Capture video clip frames, send to AI, process 4 emotions & save to DB
+    // Multi-camera emotion: laptop front (+ back if 2nd device) + classroom V380
     const captureAndAnalyzeClip = async (lecId, sessId, segNum) => {
         if (isRecordingClipRef.current) return;
         isRecordingClipRef.current = true;
@@ -661,62 +832,66 @@ const TeacherAttendanceScanner = () => {
         setClipRecordingProgress(0);
         setErrorMessage('');
 
-        const frameCount = fastDemoMode ? 6 : EMOTION_CLIP_FRAME_COUNT;
-        const frameIntervalMs = fastDemoMode ? 2000 : EMOTION_CLIP_FRAME_INTERVAL_MS;
-
-        const frames = [];
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-
-        if (!video || !canvas) {
-            isRecordingClipRef.current = false;
-            setIsRecordingClip(false);
-            setErrorMessage('Camera feed is not available. Please retry emotion detection.');
-            return;
-        }
-
-        try {
-            await waitForVideoReady(video);
-        } catch {
-            isRecordingClipRef.current = false;
-            setIsRecordingClip(false);
-            setErrorMessage('Camera feed is not ready yet. Please wait a moment and try again.');
-            return;
-        }
-
-        for (let i = 1; i <= frameCount; i++) {
-            await new Promise(r => setTimeout(r, frameIntervalMs));
-            setClipRecordingProgress(Math.round((i / frameCount) * 100));
-            if (video.videoWidth > 0 && video.videoHeight > 0) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                frames.push(canvas.toDataURL('image/jpeg', 0.75));
-            }
-        }
-
-        isRecordingClipRef.current = false;
-        setIsRecordingClip(false);
-
-        if (frames.length === 0) {
-            setErrorMessage('No frames captured from camera. Check that the front camera is working.');
-            return;
-        }
-
-        // Send at most 10 evenly-spaced frames to keep payload size manageable
-        const maxSend = 10;
-        let framesToSend = frames;
-        if (frames.length > maxSend) {
-            const step = frames.length / maxSend;
-            framesToSend = Array.from({ length: maxSend }, (_, i) => frames[Math.floor(i * step)]);
-        }
-
         let clipResult = null;
         let apiError = null;
+        const sources = [];
 
         try {
-            const pyRes = await fetch('/python-api/emotion/analyze-clip', {
+            const frontCount = fastDemoMode ? 4 : 8;
+            const backCount = fastDemoMode ? 2 : 4;
+            const intervalMs = fastDemoMode ? 250 : 300;
+
+            // 1) Laptop FRONT (keep live preview stream — do not reopen)
+            setClipRecordingProgress(10);
+            const frontFrames = [];
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            if (video && canvas) {
+                try {
+                    await waitForVideoReady(video, 5000);
+                    for (let i = 0; i < frontCount; i++) {
+                        if (i > 0) await new Promise(r => setTimeout(r, intervalMs));
+                        setClipRecordingProgress(10 + Math.round((i / frontCount) * 30));
+                        if (video.videoWidth > 0) {
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            canvas.getContext('2d').drawImage(video, 0, 0);
+                            frontFrames.push(canvas.toDataURL('image/jpeg', 0.72));
+                        }
+                    }
+                } catch (_) { /* ignore */ }
+            }
+            if (!frontFrames.length) {
+                const extra = await captureFramesFromFacing('user', frontCount, intervalMs);
+                frontFrames.push(...extra);
+            }
+            if (frontFrames.length) sources.push('front');
+
+            // 2) Back camera only if a second video input exists (avoids killing front cam)
+            setClipRecordingProgress(45);
+            let backFrames = [];
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const cams = devices.filter(d => d.kind === 'videoinput');
+                if (cams.length > 1) {
+                    backFrames = await captureFramesFromFacing('environment', backCount, intervalMs);
+                    if (backFrames.length) sources.push('back');
+                    if (webcamStreamRef.current && videoRef.current) {
+                        videoRef.current.srcObject = webcamStreamRef.current;
+                        await videoRef.current.play().catch(() => { });
+                    }
+                }
+            } catch (_) { /* back camera optional */ }
+
+            // 3) Ensure classroom stream once (AI server uses cached frames)
+            setClipRecordingProgress(60);
+            if (!classroomStatus?.running) {
+                await connectClassroomCamera(true);
+            }
+            setEmotionSourcesUsed([...sources, 'classroom']);
+            setClipRecordingProgress(70);
+
+            let pyRes = await fetch('/python-api/emotion/analyze-multi', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -724,48 +899,94 @@ const TeacherAttendanceScanner = () => {
                     classId: courseId,
                     sessionId: sessId,
                     segmentNumber: segNum,
-                    frames: framesToSend,
+                    frontFrames,
+                    backFrames,
+                    useClassroom: true,
+                    classroomFrameCount: fastDemoMode ? 3 : 4,
+                    classroomIntervalMs: 200,
                     timestamp: new Date().toISOString()
                 }),
                 signal: AbortSignal.timeout(300000),
             });
+
             if (pyRes.ok) {
                 clipResult = await pyRes.json();
             } else {
                 const errBody = await pyRes.json().catch(() => ({}));
-                apiError = errBody.detail || `AI server returned ${pyRes.status}`;
-                console.warn('Python clip emotion analysis failed:', pyRes.status, errBody);
+                // Fallback: front-only if multi-cam returns 500 / server died mid-request
+                if (frontFrames.length) {
+                    console.warn('analyze-multi failed, falling back to front-only:', errBody);
+                    const fbRes = await fetch('/python-api/emotion/analyze-clip', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            lectureId: lecId,
+                            classId: courseId,
+                            sessionId: sessId,
+                            segmentNumber: segNum,
+                            frames: frontFrames.slice(0, 10),
+                            timestamp: new Date().toISOString()
+                        }),
+                        signal: AbortSignal.timeout(300000),
+                    });
+                    if (fbRes.ok) {
+                        clipResult = await fbRes.json();
+                        clipResult.cameraSources = ['front'];
+                        clipResult.classroomError = errBody.detail || 'Classroom/multi-cam unavailable — used front camera';
+                    } else {
+                        const err2 = await fbRes.json().catch(() => ({}));
+                        apiError = err2.detail || errBody.detail || `AI server returned ${fbRes.status}`;
+                    }
+                } else {
+                    apiError = errBody.detail || `AI server returned ${pyRes.status}`;
+                }
             }
+            setClipRecordingProgress(95);
         } catch (err) {
-            apiError = err.message || 'Could not reach AI emotion server';
-            console.warn('Python clip emotion analysis error:', err);
+            apiError = err.message || 'Could not reach multi-camera emotion API';
         }
 
+        isRecordingClipRef.current = false;
+        setIsRecordingClip(false);
+        setClipRecordingProgress(100);
+        refreshClassroomStatus();
+
         if (!clipResult) {
-            setErrorMessage(apiError || 'Real AI emotion results are unavailable. Ensure the Python AI server is running.');
+            const soft = isTimeoutError(apiError) || /signal timed out|timed out|TimeoutError|AbortError|reconnecting/i.test(String(apiError || ''));
+            if (!soft) {
+                setErrorMessage(apiError || 'Real AI emotion results are unavailable. Ensure the Python AI server is running.');
+            } else {
+                // Do not show signal timeout as Scanning Failure — keep reconnecting
+                setErrorMessage('');
+                connectClassroomCamera(true);
+            }
             setScanHistory(prev => [
                 {
                     segmentNumber: segNum,
                     timestamp: new Date().toLocaleTimeString(),
                     students: 0,
                     emotions: { Happy: 0, Engaged: 0, Neutral: 0, Disengaged: 0 },
-                    note: 'Analysis failed'
+                    note: soft ? 'Waiting for classroom camera…' : 'Analysis failed'
                 },
                 ...prev
             ]);
             return;
         }
 
+        const used = clipResult.cameraSources || sources;
+        setEmotionSourcesUsed(used);
+
         const resEmotions = clipResult.emotions || { Happy: 0, Engaged: 0, Neutral: 0, Disengaged: 0 };
         const resStudents = clipResult.totalStudents || clipResult.total_students || 0;
 
         if (resStudents === 0) {
-            setErrorMessage(clipResult.message || 'No students detected in this clip. Point the camera toward the class.');
+            setErrorMessage(clipResult.message || 'No students detected. Point cameras toward the class.');
+        } else if (clipResult.classroomError) {
+            setErrorMessage(''); // soft notice via history, not hard failure
+            console.warn('Classroom note:', clipResult.classroomError);
         } else {
             setErrorMessage('');
         }
-
-        // Python analyze-clip saves EmotionRecord to Node — no duplicate frontend save
 
         setEmotionResults(resEmotions);
         setTotalStudentsDetected(resStudents);
@@ -776,7 +997,9 @@ const TeacherAttendanceScanner = () => {
                 segmentNumber: segNum,
                 timestamp: new Date().toLocaleTimeString(),
                 students: resStudents,
-                emotions: resEmotions
+                emotions: resEmotions,
+                sources: used,
+                note: clipResult.classroomError || undefined
             },
             ...prev
         ]);
@@ -867,7 +1090,7 @@ const TeacherAttendanceScanner = () => {
                         handleFaceVerification();
                         return 100;
                     }
-                    if (nextVal < 30) setScanningStatus('Scanning classroom camera feed...');
+                    if (nextVal < 30) setScanningStatus('Scanning laptop front camera...');
                     else if (nextVal < 60) setScanningStatus('Detecting facial boundaries...');
                     else if (nextVal < 90) setScanningStatus('Analyzing face descriptor vectors...');
                     else setScanningStatus('Verifying against registered MongoDB descriptors...');
@@ -938,7 +1161,10 @@ const TeacherAttendanceScanner = () => {
                     {isEmotionMode && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '12px', background: '#EEF2FF', border: '1px solid #C7D2FE', color: '#4338CA', fontSize: '0.8rem', fontWeight: 700 }}>
                             <Video size={16} />
-                            <span>Front Camera</span>
+                            <span>
+                                Multi-cam emotion
+                                {emotionSourcesUsed.length ? `: ${emotionSourcesUsed.join(' + ')}` : ': front + back + classroom'}
+                            </span>
                         </div>
                     )}
                     <div style={{
@@ -1064,27 +1290,47 @@ const TeacherAttendanceScanner = () => {
                         </div>
                     )}
 
-                    {/* MODE 2: Student Emotion Detection — Front Camera View */}
+                    {/* MODE 2: Student Emotion — front + classroom preview (back captured per clip) */}
                     {isEmotionMode && (
-                        <div style={{ position: 'relative', width: '100%', maxWidth: '520px', height: '360px', background: '#000', borderRadius: '16px', overflow: 'hidden', boxShadow: 'var(--shadow-lg)', border: '3px solid #6366F1' }}>
-                            <video
-                                ref={videoRef}
-                                autoPlay
-                                playsInline
-                                muted
-                                style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
-                            />
-
-                            <div style={{ position: 'absolute', top: '16px', left: '16px', background: 'rgba(0, 0, 0, 0.75)', color: '#FFF', padding: '6px 14px', borderRadius: '20px', fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isRecordingClip ? '#EF4444' : '#10B981', animation: isRecordingClip ? 'pulse 1s infinite' : 'none' }} />
-                                {isRecordingClip ? 'REC (2-Minute Clip Active)' : 'Front Camera — Student Emotion Scan'}
+                        <div style={{ width: '100%', maxWidth: '560px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '10px' }}>
+                                <div style={{ position: 'relative', height: '300px', background: '#000', borderRadius: '14px', overflow: 'hidden', border: '3px solid #6366F1' }}>
+                                    <video
+                                        ref={videoRef}
+                                        autoPlay
+                                        playsInline
+                                        muted
+                                        style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                                    />
+                                    <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'rgba(0,0,0,0.75)', color: '#FFF', padding: '4px 10px', borderRadius: '14px', fontSize: '0.72rem', fontWeight: 700 }}>
+                                        Laptop front
+                                    </div>
+                                </div>
+                                <div style={{ position: 'relative', height: '300px', background: '#0F172A', borderRadius: '14px', overflow: 'hidden', border: '3px solid #22C55E' }}>
+                                    {/* Stable MJPEG src — never change key/src or the feed dies after ~2s */}
+                                    <img
+                                        src="/python-api/classroom-camera/stream"
+                                        alt="Classroom camera"
+                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                    />
+                                    {!(classroomStatus?.has_frame || classroomStatus?.running || classroomStatus?.ok) && (
+                                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94A3B8', fontSize: '0.75rem', padding: '12px', textAlign: 'center', background: 'rgba(15,23,42,0.55)', pointerEvents: 'none' }}>
+                                            {classroomBusy ? 'Connecting classroom camera…' : 'Waiting for classroom stream…'}
+                                        </div>
+                                    )}
+                                    <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'rgba(0,0,0,0.75)', color: '#FFF', padding: '4px 10px', borderRadius: '14px', fontSize: '0.72rem', fontWeight: 700 }}>
+                                        Classroom V380
+                                    </div>
+                                </div>
                             </div>
+                            <p style={{ margin: '10px 0 0', fontSize: '0.78rem', color: '#64748B', textAlign: 'center' }}>
+                                Back camera is captured automatically each clip when available. Teacher face login uses front camera only.
+                            </p>
 
-                            {/* 2-Minute Recording Progress Bar */}
                             {isRecordingClip && (
-                                <div style={{ position: 'absolute', bottom: '20px', left: '20px', right: '20px', background: 'rgba(0, 0, 0, 0.85)', padding: '12px 16px', borderRadius: '12px', border: '1px solid #EF4444' }}>
+                                <div style={{ marginTop: '12px', background: '#0F172A', padding: '12px 16px', borderRadius: '12px', border: '1px solid #EF4444' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', color: '#FFF', fontSize: '0.85rem', fontWeight: 700, marginBottom: '6px' }}>
-                                        <span>🎥 Recording 2-Minute Student Clip...</span>
+                                        <span>Recording multi-camera emotion clip…</span>
                                         <span>{clipRecordingProgress}%</span>
                                     </div>
                                     <div style={{ width: '100%', height: '6px', background: '#374151', borderRadius: '3px', overflow: 'hidden' }}>
@@ -1092,12 +1338,6 @@ const TeacherAttendanceScanner = () => {
                                     </div>
                                 </div>
                             )}
-
-                            {/* Corner bounding lines for classroom view */}
-                            <div style={{ position: 'absolute', top: '20px', left: '20px', width: '20px', height: '20px', borderTop: '3px solid #6366F1', borderLeft: '3px solid #6366F1' }} />
-                            <div style={{ position: 'absolute', top: '20px', right: '20px', width: '20px', height: '20px', borderTop: '3px solid #6366F1', borderRight: '3px solid #6366F1' }} />
-                            <div style={{ position: 'absolute', bottom: '20px', left: '20px', width: '20px', height: '20px', borderBottom: '3px solid #6366F1', borderLeft: '3px solid #6366F1' }} />
-                            <div style={{ position: 'absolute', bottom: '20px', right: '20px', width: '20px', height: '20px', borderBottom: '3px solid #6366F1', borderRight: '3px solid #6366F1' }} />
                         </div>
                     )}
 
@@ -1175,7 +1415,7 @@ const TeacherAttendanceScanner = () => {
                                 </MOTION.div>
                                 <h2 style={{ color: '#065F46', margin: '16px 0 8px 0', fontSize: '1.8rem', fontWeight: 800 }}>Teacher Verified ✓</h2>
                                 <p style={{ color: '#047857', fontWeight: 600, fontSize: '1.05rem', margin: 0 }}>
-                                    Switching to front camera for student emotion detection...
+                                    Starting student emotion detection...
                                 </p>
                             </MOTION.div>
                         )}
@@ -1191,6 +1431,48 @@ const TeacherAttendanceScanner = () => {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '16px' }}>
                                 <Sparkles size={20} color="#6366F1" />
                                 <h2 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Student Emotion Metrics</h2>
+                            </div>
+
+                            {/* Multi-camera status — credentials stay in ClassMind.ai/.env */}
+                            <div style={{ marginBottom: '16px', padding: '12px', borderRadius: '12px', background: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155', marginBottom: '8px' }}>Emotion cameras (all used together)</div>
+                                <div style={{ display: 'grid', gap: '6px', fontSize: '0.75rem', color: '#475569', marginBottom: '10px' }}>
+                                    <div>Laptop front — live preview + emotion frames</div>
+                                    <div>Laptop back — captured each clip when available</div>
+                                    <div>
+                                        Classroom V380 — {classroomStatus?.running ? 'connected' : classroomStatus?.has_env_config ? 'saved credentials ready' : 'not configured'}
+                                        {classroomStatus?.has_permanent_credentials ? ' (password saved permanently)' : ''}
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button type="button" disabled={classroomBusy} onClick={() => connectClassroomCamera(false)} className="btn-primary" style={{ flex: 1, padding: '8px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                                        {classroomBusy ? 'Connecting…' : 'Connect classroom'}
+                                    </button>
+                                    <button type="button" disabled={classroomBusy} onClick={testClassroomCamera} className="btn-secondary" style={{ flex: 1, padding: '8px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                                        Test
+                                    </button>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowClassroomEdit(v => !v)}
+                                    style={{ marginTop: '8px', background: 'none', border: 'none', color: '#6366F1', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                                >
+                                    {showClassroomEdit ? 'Hide advanced override' : 'Advanced: override RTSP (optional)'}
+                                </button>
+                                {showClassroomEdit && (
+                                    <div style={{ display: 'grid', gap: '8px', marginTop: '8px' }}>
+                                        <input type="text" placeholder="rtsp://… (leave blank to use .env)" value={classroomRtspUrl} onChange={(e) => setClassroomRtspUrl(e.target.value)} style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.8rem' }} />
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                            <input type="text" placeholder="Username override" value={classroomUser} onChange={(e) => setClassroomUser(e.target.value)} style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.8rem' }} />
+                                            <input type="password" placeholder="Password override" value={classroomPass} onChange={(e) => setClassroomPass(e.target.value)} style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '0.8rem' }} />
+                                        </div>
+                                    </div>
+                                )}
+                                <p style={{ margin: '8px 0 0', fontSize: '0.72rem', color: classroomStatus?.has_frame ? '#047857' : '#64748B' }}>
+                                    {classroomStatus?.has_frame
+                                        ? 'Classroom camera linked to emotion detection'
+                                        : 'Classroom camera connecting in background (no timeout errors shown)'}
+                                </p>
                             </div>
 
                             {/* Key Stats Bar */}
@@ -1338,8 +1620,30 @@ const TeacherAttendanceScanner = () => {
                             )}
                         </div>
                     ) : (
-                        /* Initial Scan Simulation Controls */
+                        /* Teacher attendance tools — face ID is front camera only */
                         <div>
+                            <div style={{ marginBottom: '20px', padding: '12px', borderRadius: '12px', background: '#EEF2FF', border: '1px solid #C7D2FE' }}>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#3730A3', marginBottom: '6px' }}>Camera roles</div>
+                                <p style={{ margin: '0 0 8px 0', fontSize: '0.75rem', color: '#4338CA', lineHeight: 1.45 }}>
+                                    <strong>Teacher attendance:</strong> laptop front camera only.<br />
+                                    <strong>Student emotion:</strong> front + back + classroom V380 together.<br />
+                                    Classroom username/password are saved permanently in <code>ClassMind.ai/.env</code> — no re-entry each time.
+                                </p>
+                                <button
+                                    type="button"
+                                    disabled={classroomBusy}
+                                    onClick={() => connectClassroomCamera(false)}
+                                    style={{ width: '100%', padding: '8px', borderRadius: '8px', border: 'none', background: '#4F46E5', color: '#FFF', fontWeight: 600, fontSize: '0.75rem', cursor: 'pointer' }}
+                                >
+                                    {classroomBusy ? 'Connecting…' : 'Connect classroom camera (saved credentials)'}
+                                </button>
+                                {classroomStatus?.url && (
+                                    <p style={{ margin: '8px 0 0', fontSize: '0.68rem', color: '#64748B', wordBreak: 'break-all' }}>
+                                        {classroomStatus.url}
+                                    </p>
+                                )}
+                            </div>
+
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '16px' }}>
                                 <Settings size={20} color="var(--primary)" />
                                 <h2 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0 }}>Simulation Tools</h2>

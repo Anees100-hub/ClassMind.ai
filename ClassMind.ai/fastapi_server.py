@@ -26,6 +26,7 @@ import pickle
 import json
 import subprocess
 import asyncio
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -42,7 +43,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from PIL import Image
 
@@ -67,11 +68,13 @@ from face_engine import (
 from emotion_engine import analyze_frame, summarize_segment, summarize_lecture, decode_base64_image, HAS_DEEPFACE
 
 # -----------------------------------------------------------
-# ENVIRONMENT SETUP
+# ENVIRONMENT SETUP (must load before classroom_camera singleton)
 # -----------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 load_dotenv(os.path.join(BASE_DIR, "..", "server", ".env"))
+
+from classroom_camera import classroom_camera  # noqa: E402
 
 MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
@@ -91,20 +94,34 @@ ENCODINGS_FILE  = os.path.join(MODEL_DIR, "face_encodings.pkl")
 # -----------------------------------------------------------
 # MONGODB CONNECTION (Python direct access)
 # -----------------------------------------------------------
-try:
-    mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    mongo_client.admin.command("ping")
+def connect_mongo():
+    """Connect to Atlas (pymongo — do not pass mongoose-only options like family)."""
+    client = MongoClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=30000,
+        connectTimeoutMS=20000,
+        socketTimeoutMS=45000,
+        tlsAllowInvalidCertificates=True,
+        retryWrites=True,
+    )
+    client.admin.command("ping")
     try:
-        db = mongo_client.get_default_database()
-        if db.name == "admin" or db.name == "local":
+        database = client.get_default_database()
+        if database.name in ("admin", "local"):
             raise ValueError("No default database in URI")
     except Exception:
-        db = mongo_client["test"]
-    teachers_col    = db["Teachers"]
-    attendance_col  = db["Attendance"]
-    print(f"[DB] Connected to MongoDB database '{db.name}': {MONGO_URI}")
+        database = client["test"]
+    return client, database
+
+
+try:
+    mongo_client, db = connect_mongo()
+    teachers_col = db["Teachers"]
+    attendance_col = db["Attendance"]
+    print(f"[DB] Connected to MongoDB database '{db.name}'")
 except Exception as e:
     print(f"[DB ERROR] Could not connect to MongoDB: {e}")
+    print("[DB] Face registration will still work via Node API (descriptor extract only).")
     mongo_client = None
     db = None
     teachers_col = None
@@ -606,12 +623,10 @@ async def register_face_to_db(
     file: UploadFile = File(...)
 ):
     """
-    Upload teacher photo → extract 128D face encoding → save to MongoDB directly.
-    This integrates with your existing Teacher schema's faceDescriptor field.
+    Upload teacher photo → extract face descriptor (DeepFace 512D).
+    Saves to MongoDB when Python can reach Atlas; always returns the descriptor
+    so the Node API can persist it even if Python Mongo is down.
     """
-    if not teachers_col:
-        raise HTTPException(status_code=503, detail="MongoDB not connected.")
-
     if not recognition_available():
         raise HTTPException(
             status_code=503,
@@ -626,10 +641,10 @@ async def register_face_to_db(
         raise HTTPException(status_code=400, detail="Invalid image file.")
 
     try:
-        validation = validate_image_for_registration(img)
+        validation = await asyncio.to_thread(validate_image_for_registration, img)
         if not validation.get("valid"):
             raise HTTPException(status_code=422, detail=validation.get("message", "Face validation failed."))
-        encoding_list = extract_descriptor_from_bgr(img)
+        encoding_list = await asyncio.to_thread(extract_descriptor_from_bgr, img)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -643,24 +658,55 @@ async def register_face_to_db(
             detail=f"Invalid face descriptor dimensions ({len(encoding_list)}). Expected {expected_descriptor_dim()}."
         )
 
-    # Update MongoDB Teacher document
-    result = teachers_col.update_one(
-        {"id": int(teacher_id)},
-        {"$set": {"faceDescriptor": encoding_list}}
-    )
+    matched_count = 0
+    modified_count = 0
+    mongo_saved = False
+    mongo_warning = None
 
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail=f"Teacher with ID {teacher_id} not found.")
+    # Prefer direct Mongo write when available; never block registration if Atlas is down
+    global mongo_client, db, teachers_col, attendance_col
+    if teachers_col is None:
+        try:
+            mongo_client, db = connect_mongo()
+            teachers_col = db["Teachers"]
+            attendance_col = db["Attendance"]
+            print(f"[DB] Reconnected to MongoDB database '{db.name}'")
+        except Exception as exc:
+            mongo_warning = f"Python Mongo unavailable ({exc}); descriptor returned for Node to save."
 
-    rebuild_encodings_from_mongo()
+    if teachers_col is not None:
+        try:
+            result = teachers_col.update_one(
+                {"id": int(teacher_id)},
+                {"$set": {"faceDescriptor": encoding_list}}
+            )
+            matched_count = result.matched_count
+            modified_count = result.modified_count
+            if matched_count == 0:
+                # Still return descriptor — Node may have the teacher even if Python query failed
+                mongo_warning = f"Teacher ID {teacher_id} not found in Python Mongo write; use Node save."
+            else:
+                mongo_saved = True
+                try:
+                    rebuild_encodings_from_mongo()
+                except Exception as rebuild_err:
+                    print(f"[WARN] rebuild after register failed: {rebuild_err}")
+        except Exception as exc:
+            mongo_warning = f"Mongo save failed ({exc}); descriptor returned for Node to save."
 
     return {
-        "message": "Face descriptor registered to MongoDB successfully.",
+        "message": (
+            "Face descriptor registered to MongoDB successfully."
+            if mongo_saved
+            else "Face descriptor extracted. Save via Node API if Mongo was unavailable."
+        ),
         "teacher_id": teacher_id,
         "descriptor": encoding_list,
         "descriptor_dimensions": len(encoding_list),
-        "matched_count": result.matched_count,
-        "modified_count": result.modified_count
+        "matched_count": matched_count,
+        "modified_count": modified_count,
+        "mongo_saved": mongo_saved,
+        "mongo_warning": mongo_warning,
     }
 
 
@@ -707,6 +753,11 @@ async def startup_event():
                 print(f"  [WARN] {legacy} teacher(s) have legacy face data — re-register from scanner.")
         except Exception as e:
             print(f"  [WARN] MongoDB bootstrap skipped: {e}")
+
+    # Do NOT auto-open RTSP on boot — OpenCV/FFmpeg can freeze the whole AI process
+    # on Windows. Teachers connect via Dashboard "Connect / Test Camera".
+    if os.getenv("CLASSROOM_CAMERA_URL"):
+        print("  Classroom cam: configured (connect from Teacher Dashboard when needed)")
 
     print("[ClassMind.ai] Server ready! Swagger UI: http://localhost:8000/docs\n")
 
@@ -929,5 +980,356 @@ async def analyze_student_clip(payload: dict = Body(...)):
     except Exception as exc:
         print(f"[emotion] analyze-clip failed: {exc}")
         raise HTTPException(status_code=500, detail=f"Emotion analysis failed: {exc}")
+
+
+# -----------------------------------------------------------
+# CLASSROOM WIFI CAMERA (V380 Pro RTSP) FOR STUDENT EMOTION
+# -----------------------------------------------------------
+class ClassroomCameraConfig(BaseModel):
+    url: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+@app.get("/api/classroom-camera/status")
+async def classroom_camera_status():
+    return classroom_camera.status()
+
+
+@app.post("/api/classroom-camera/configure")
+async def classroom_camera_configure(body: ClassroomCameraConfig):
+    classroom_camera.configure(
+        url=body.url or "",
+        username=body.username or "",
+        password=body.password if body.password is not None else "",
+    )
+    return {"ok": True, **classroom_camera.status()}
+
+
+@app.post("/api/classroom-camera/test")
+async def classroom_camera_test(body: Optional[ClassroomCameraConfig] = None):
+    if body is not None:
+        classroom_camera.configure(
+            url=body.url or "",
+            username=body.username or "",
+            password=body.password if body.password is not None else "",
+        )
+    result = await asyncio.to_thread(classroom_camera.test_connection)
+    return result
+
+
+@app.post("/api/classroom-camera/start")
+async def classroom_camera_start(body: Optional[ClassroomCameraConfig] = None):
+    # Prefer permanent .env; only apply non-empty UI overrides
+    classroom_camera.reload_env()
+    if body is not None:
+        classroom_camera.configure(
+            url=body.url or "",
+            username=body.username or "",
+            password=body.password if body.password is not None else "",
+        )
+    # Never hard-fail with timeout — start() returns soft status and keeps retrying
+    status = await asyncio.to_thread(classroom_camera.start)
+    return {"ok": bool(status.get("has_frame")), **status}
+
+
+@app.post("/api/classroom-camera/stop")
+async def classroom_camera_stop():
+    status = await asyncio.to_thread(classroom_camera.stop)
+    return {"ok": True, **status}
+
+
+@app.get("/api/classroom-camera/snapshot")
+async def classroom_camera_snapshot():
+    # Serve last good frame even during brief reconnects (no timeout error to UI)
+    jpeg = await asyncio.to_thread(classroom_camera.get_jpeg_bytes, 70)
+    if jpeg:
+        return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    # Kick connect quietly; return 204 so UI does not show "Scanning Failure"
+    if not classroom_camera.running:
+        asyncio.create_task(asyncio.to_thread(classroom_camera.start))
+    return Response(status_code=204)
+
+
+@app.get("/api/classroom-camera/stream")
+async def classroom_camera_stream():
+    """
+    Live MJPEG preview for dashboard / emotion UI.
+    Much smoother than reloading a snapshot URL every few seconds.
+    """
+    # IMPORTANT: never use `not get_frame()` — numpy arrays break truthiness
+    has_live = bool(classroom_camera.running and classroom_camera.get_frame() is not None)
+    if not has_live:
+        # Start once in background; stream will begin when frames arrive
+        asyncio.create_task(asyncio.to_thread(classroom_camera.start))
+
+    boundary = "frame"
+
+    def mjpeg_generator():
+        idle = 0
+        while True:
+            try:
+                jpeg = classroom_camera.get_jpeg_bytes(55)
+            except Exception:
+                jpeg = None
+            if jpeg is not None:
+                idle = 0
+                yield (
+                    b"--" + boundary.encode() + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                )
+                time.sleep(0.15)  # ~6–7 fps — stable for Wi‑Fi V380
+            else:
+                idle += 1
+                time.sleep(0.35 if idle > 20 else 0.2)
+
+    return StreamingResponse(
+        mjpeg_generator(),
+        media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+async def _analyze_emotion_frames(frames_bgr: list) -> tuple[dict, int, int]:
+    """Returns (percentages, max_students, total_readings)."""
+    counts = {"Happy": 0, "Engaged": 0, "Neutral": 0, "Disengaged": 0}
+    total_readings = 0
+    max_students = 0
+
+    for frame in frames_bgr:
+        try:
+            faces = await asyncio.to_thread(analyze_frame, frame)
+            if len(faces) > max_students:
+                max_students = len(faces)
+            for face in faces:
+                raw = face.get("raw_emotion", "neutral").lower()
+                metric = EMOTION_4_MAP.get(raw, "Neutral")
+                counts[metric] += 1
+                total_readings += 1
+        except Exception as frame_err:
+            print(f"[emotion] frame skipped: {frame_err}")
+
+    if total_readings == 0 and max_students == 0:
+        percentages = {"Happy": 0.0, "Engaged": 0.0, "Neutral": 0.0, "Disengaged": 0.0}
+    elif total_readings == 0 and max_students > 0:
+        percentages = {"Happy": 0.0, "Engaged": 0.0, "Neutral": 100.0, "Disengaged": 0.0}
+    else:
+        percentages = {
+            m: round((counts[m] / total_readings) * 100.0, 2)
+            for m in ["Happy", "Engaged", "Neutral", "Disengaged"]
+        }
+    return percentages, max_students, total_readings
+
+
+@app.post("/api/emotion/analyze-classroom-clip")
+async def analyze_classroom_clip(payload: dict = Body(...)):
+    """Grab frames from V380 RTSP and run 4-metric emotion analysis."""
+    lecture_id = payload.get("lectureId") or payload.get("lecture_id")
+    class_id = payload.get("classId") or payload.get("class_id")
+    session_id = payload.get("sessionId") or payload.get("session_id") or f"SES-{int(datetime.now().timestamp())}"
+    segment_number = payload.get("segmentNumber", 1)
+    frame_count = int(payload.get("frameCount") or 8)
+    interval_sec = float(payload.get("intervalSec") or 0.35)
+    timestamp = payload.get("timestamp") or datetime.now().isoformat()
+
+    if not lecture_id:
+        raise HTTPException(status_code=400, detail="lectureId is required")
+
+    if not classroom_camera.running:
+        if classroom_camera.effective_url:
+            try:
+                await asyncio.to_thread(classroom_camera.start)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Could not start classroom camera: {exc}")
+        else:
+            raise HTTPException(status_code=400, detail="Classroom camera URL not configured")
+
+    frames = await asyncio.to_thread(classroom_camera.grab_frames, frame_count, interval_sec)
+    if not frames:
+        raise HTTPException(status_code=503, detail="No frames from classroom camera")
+
+    percentages, max_students, _ = await _analyze_emotion_frames(frames)
+
+    node_payload = {
+        "lectureId": lecture_id,
+        "classId": class_id,
+        "sessionId": session_id,
+        "segmentNumber": segment_number,
+        "totalStudents": max_students,
+        "timestamp": timestamp,
+        "emotions": percentages,
+        "cameraSource": "classroom",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{NODE_BACKEND}/api/engagement/emotion-record",
+                json=node_payload,
+                headers=node_internal_headers(),
+            )
+    except Exception as e:
+        print("[WARN] Failed to save classroom EmotionRecord to Node backend:", e)
+
+    return {
+        "status": "success",
+        "lectureId": lecture_id,
+        "sessionId": session_id,
+        "segmentNumber": segment_number,
+        "totalStudents": max_students,
+        "timestamp": timestamp,
+        "emotions": percentages,
+        "cameraSource": "classroom",
+        "framesAnalyzed": len(frames),
+        "message": "No students detected" if max_students == 0 else f"{max_students} student(s) detected",
+    }
+
+
+@app.post("/api/emotion/analyze-multi")
+async def analyze_multi_camera_clip(payload: dict = Body(...)):
+    """
+    Multi-camera emotion detection:
+    - front/back laptop frames from browser
+    - classroom V380 frames from cached RTSP reader (never opens a 2nd stream)
+    Classroom failures must not fail the whole request if laptop frames exist.
+    """
+    try:
+        lecture_id = payload.get("lectureId") or payload.get("lecture_id")
+        class_id = payload.get("classId") or payload.get("class_id")
+        session_id = payload.get("sessionId") or payload.get("session_id") or f"SES-{int(datetime.now().timestamp())}"
+        segment_number = payload.get("segmentNumber", 1)
+        timestamp = payload.get("timestamp") or datetime.now().isoformat()
+        front_frames_b64 = payload.get("frontFrames") or []
+        back_frames_b64 = payload.get("backFrames") or []
+        laptop_frames_b64 = payload.get("laptopFrames") or payload.get("frames") or []
+        use_classroom = payload.get("useClassroom", True)
+        classroom_frame_count = int(payload.get("classroomFrameCount") or 4)
+        raw_interval = payload.get("intervalSec")
+        if raw_interval is None:
+            raw_interval = float(payload.get("classroomIntervalMs") or 300) / 1000.0
+        interval_sec = max(0.1, float(raw_interval))
+
+        if not lecture_id:
+            raise HTTPException(status_code=400, detail="lectureId is required")
+
+        sources_used = []
+        all_frames = []
+
+        def _decode_sample(b64_list, cap=10):
+            if not b64_list:
+                return []
+            sample = b64_list
+            if len(sample) > cap:
+                step = len(sample) / float(cap)
+                sample = [b64_list[int(i * step)] for i in range(cap)]
+            out = []
+            for b64 in sample:
+                frame = decode_base64_image(b64)
+                if frame is not None:
+                    out.append(frame)
+            return out
+
+        front_decoded = _decode_sample(front_frames_b64, 8)
+        if front_decoded:
+            all_frames.extend(front_decoded)
+            sources_used.append("front")
+
+        back_decoded = _decode_sample(back_frames_b64, 6)
+        if back_decoded:
+            all_frames.extend(back_decoded)
+            sources_used.append("back")
+
+        if not front_decoded and not back_decoded and laptop_frames_b64:
+            laptop_decoded = _decode_sample(laptop_frames_b64, 12)
+            all_frames.extend(laptop_decoded)
+            if laptop_decoded:
+                sources_used.append("laptop")
+
+        classroom_error = None
+        if use_classroom and (classroom_camera.effective_url or classroom_camera.url or os.getenv("CLASSROOM_CAMERA_URL")):
+            try:
+                # Soft start only if idle — NEVER force-reopen (that kills live MJPEG preview)
+                if not classroom_camera.running or classroom_camera.get_frame() is None:
+                    await asyncio.to_thread(classroom_camera.start)
+                room_frames = await asyncio.to_thread(
+                    classroom_camera.grab_frames, classroom_frame_count, interval_sec
+                )
+                # Wait briefly for cached frames; do not restart RTSP
+                if not room_frames:
+                    await asyncio.sleep(1.0)
+                    room_frames = await asyncio.to_thread(
+                        classroom_camera.grab_frames, max(2, classroom_frame_count // 2), 0.2
+                    )
+                all_frames.extend(room_frames)
+                if room_frames:
+                    sources_used.append("classroom")
+                else:
+                    classroom_error = "Classroom frames unavailable this clip (preview kept alive)"
+            except Exception as exc:
+                classroom_error = "Classroom unavailable this clip"
+                print(f"[emotion] classroom camera deferred: {exc}")
+        elif use_classroom:
+            classroom_error = "Classroom camera URL not configured in ClassMind.ai/.env"
+
+        if not all_frames:
+            raise HTTPException(
+                status_code=503,
+                detail=classroom_error or "No frames from laptop or classroom cameras",
+            )
+
+        percentages, max_students, total_readings = await _analyze_emotion_frames(all_frames)
+
+        node_payload = {
+            "lectureId": lecture_id,
+            "classId": class_id,
+            "sessionId": session_id,
+            "segmentNumber": segment_number,
+            "totalStudents": max_students,
+            "timestamp": timestamp,
+            "emotions": percentages,
+            "cameraSource": "+".join(sources_used) if sources_used else "unknown",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(
+                    f"{NODE_BACKEND}/api/engagement/emotion-record",
+                    json=node_payload,
+                    headers=node_internal_headers(),
+                )
+        except Exception as e:
+            print("[WARN] Failed to save multi-camera EmotionRecord:", e)
+
+        msg = (
+            "No students detected"
+            if max_students == 0
+            else f"{max_students} student(s) detected from {', '.join(sources_used)}"
+        )
+        if classroom_error and "classroom" not in sources_used:
+            msg += f" (classroom skipped: {classroom_error})"
+
+        return {
+            "status": "success",
+            "lectureId": lecture_id,
+            "sessionId": session_id,
+            "segmentNumber": segment_number,
+            "totalStudents": max_students,
+            "timestamp": timestamp,
+            "emotions": percentages,
+            "cameraSources": sources_used,
+            "framesAnalyzed": len(all_frames),
+            "totalReadings": total_readings,
+            "classroomError": classroom_error,
+            "message": msg,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[emotion] analyze-multi failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Emotion analysis failed: {exc}") from exc
 
 

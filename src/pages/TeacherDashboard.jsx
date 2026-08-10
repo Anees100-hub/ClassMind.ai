@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { motion as MOTION } from 'framer-motion';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { BookOpen, Users, TrendingUp, Upload, Clock, BarChart3, Bell, Sparkles, Camera } from 'lucide-react';
+import { BookOpen, Users, TrendingUp, Upload, Clock, BarChart3, Bell, Sparkles, Camera, Video, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch } from '../utils/api';
 import './TeacherDashboard.css';
@@ -12,13 +12,68 @@ const TeacherDashboard = () => {
     const { currentUser } = useAuth();
     const navigate = useNavigate();
     const [liveEngagement, setLiveEngagement] = useState({});
+    const [cameraStatus, setCameraStatus] = useState(null);
+    const [cameraBusy, setCameraBusy] = useState(false);
+    const [streamKey, setStreamKey] = useState(0);
 
     const teacherData = getTeacherData(currentUser?.email);
     const teacherObj = teachers.find(t => t.email === currentUser?.email);
     const unreadNotifs = teacherNotifications.filter(n => n.unread).length;
 
+    const checkClassroomCamera = useCallback(async () => {
+        try {
+            const res = await fetch('/python-api/classroom-camera/status', {
+                signal: AbortSignal.timeout(10000),
+            });
+            const data = await res.json().catch(() => null);
+            if (data) {
+                setCameraStatus(data);
+            } else {
+                setCameraStatus({ configured: false, running: false, has_frame: false });
+            }
+        } catch {
+            setCameraStatus({
+                configured: false,
+                running: false,
+                has_frame: false,
+                aiOffline: true,
+                last_error: 'AI server offline',
+            });
+        }
+    }, []);
+
+    const connectClassroomCamera = async () => {
+        setCameraBusy(true);
+        try {
+            const res = await fetch('/python-api/classroom-camera/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+                signal: AbortSignal.timeout(90000),
+            });
+            const data = await res.json().catch(() => ({}));
+            setCameraStatus(data);
+            // Restart MJPEG img only after a fresh connect
+            if (data.has_frame || data.running) setStreamKey(Date.now());
+        } catch {
+            setCameraStatus(prev => ({
+                ...(prev || {}),
+                running: false,
+                has_frame: false,
+                reconnecting: true,
+                last_error: 'Still connecting…',
+            }));
+        } finally {
+            setCameraBusy(false);
+            checkClassroomCamera();
+        }
+    };
+
     useEffect(() => {
         refreshData();
+        checkClassroomCamera();
+        const id = setInterval(checkClassroomCamera, 10000);
+        return () => clearInterval(id);
     }, []);
 
     useEffect(() => {
@@ -137,6 +192,55 @@ const TeacherDashboard = () => {
                         </MOTION.div>
                     );
                 })}
+            </div>
+
+            {/* Quick classroom camera check — no face scan required */}
+            <div className="classroom-cam-check">
+                <div className="classroom-cam-check-left">
+                    <div className="classroom-cam-check-title">
+                        <Video size={20} />
+                        <div>
+                            <h3>Classroom Camera</h3>
+                            <p>Check V380 connection for emotion detection (no face scan needed)</p>
+                        </div>
+                    </div>
+                    <div className={`classroom-cam-badge ${(cameraStatus?.has_frame || cameraStatus?.running) ? 'ok' : cameraStatus?.aiOffline ? 'offline' : 'wait'}`}>
+                        {(cameraStatus?.has_frame || cameraStatus?.running) ? (
+                            <><Wifi size={16} /> Connected</>
+                        ) : cameraStatus?.aiOffline ? (
+                            <><WifiOff size={16} /> AI server offline</>
+                        ) : cameraStatus?.reconnecting ? (
+                            <><RefreshCw size={16} className="spin-slow" /> Connecting…</>
+                        ) : (
+                            <><WifiOff size={16} /> Not connected</>
+                        )}
+                    </div>
+                    {cameraStatus?.url && (
+                        <p className="classroom-cam-url">{cameraStatus.url}</p>
+                    )}
+                    <div className="classroom-cam-actions">
+                        <button type="button" className="teacher-btn-main" disabled={cameraBusy} onClick={connectClassroomCamera}>
+                            {cameraBusy ? 'Connecting…' : 'Connect / Test Camera'}
+                        </button>
+                        <button type="button" className="teacher-btn-icon" disabled={cameraBusy} onClick={checkClassroomCamera} title="Refresh status">
+                            <RefreshCw size={18} />
+                        </button>
+                    </div>
+                </div>
+                <div className="classroom-cam-preview">
+                    {(cameraStatus?.has_frame || cameraStatus?.running || cameraStatus?.ok) ? (
+                        <img
+                            key={streamKey}
+                            src={`/python-api/classroom-camera/stream?t=${streamKey}`}
+                            alt="Classroom camera live"
+                        />
+                    ) : (
+                        <div className="classroom-cam-preview-empty">
+                            <Camera size={32} />
+                            <span>{cameraBusy || cameraStatus?.reconnecting ? 'Connecting…' : 'Click Connect / Test Camera'}</span>
+                        </div>
+                    )}
+                </div>
             </div>
 
             <div className="dashboard-section-header">
